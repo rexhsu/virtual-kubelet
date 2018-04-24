@@ -94,6 +94,11 @@ func New(nodeName, operatingSystem, namespace, kubeConfig, taint, provider, prov
 		if err != nil {
 			return nil, err
 		}
+	case "openstack":
+		p, err = openstack.NewZunProvider(providerConfig, rm, nodeName, operatingSystem)
+		if err != nil {
+			return nil, err
+		}
 	case "mock":
 		p, err = mock.NewMockProvider(nodeName, operatingSystem, internalIP, daemonEndpointPort)
 		if err != nil {

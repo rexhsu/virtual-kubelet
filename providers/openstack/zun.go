@@ -1,0 +1,270 @@
+package openstack
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/gophercloud/gophercloud"
+	"github.com/gophercloud/gophercloud/openstack"
+	"github.com/gophercloud/gophercloud/openstack/container/v1/capsules"
+	"github.com/virtual-kubelet/virtual-kubelet/manager"
+	"k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// ZunProvider implements the virtual-kubelet provider interface and communicates with OpenStack's Zun APIs.
+type ZunProvider struct {
+	ZunClient          *gophercloud.ProviderClient
+	resourceManager    *manager.ResourceManager
+	region             string
+	nodeName           string
+	operatingSystem    string
+	cpu                string
+	memory             string
+	pods               string
+}
+
+// NewZunProvider creates a new ZunProvider.
+func NewZunProvider(config string, rm *manager.ResourceManager, nodeName, operatingSystem string) (*ZunProvider, error) {
+	var p ZunProvider
+	var err error
+
+	p.resourceManager = rm
+
+	AuthOptions, err := openstack.AuthOptionsFromEnv()
+	if err != nil{
+		fmt.Errorf("Unable to get the Auth options from environment variables: %s", err)
+		return nil, err
+	}
+
+	Provider, err := openstack.AuthenticatedClient(AuthOptions)
+	if err != nil {
+		fmt.Errorf("Unable to get provider: %s", err)
+		return nil, err
+	}
+
+	p.ZunClient, err = openstack.NewContainerV1(Provider, gophercloud.EndpointOpts{
+		Region: os.Getenv("OS_REGION_NAME"),
+	})
+	if err != nil {
+		fmt.Errorf("Unable to get zun client")
+		return nil, err
+	}
+
+	// Set sane defaults for Capacity in case config is not supplied
+	p.cpu = "20"
+	p.memory = "100Gi"
+	p.pods = "20"
+
+	p.operatingSystem = operatingSystem
+	p.nodeName = nodeName
+
+	return &p, err
+}
+
+// GetPod returns a pod by name that is running inside ACI
+// returns nil if a pod by that name is not found.
+func (p *ZunProvider) GetPod(namespace, name string) (*v1.Pod, error) {
+	capsule, err := capsules.Get(p.ZunClient, fmt.Sprintf("%s-%s", namespace, name)).Extract()
+	if err != nil {
+		if err == gophercloud.ErrDefault404 {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	//if cg.Tags["NodeName"] != p.nodeName {
+	//	return nil, nil
+	//}
+
+	return capsuleToPod(capsule)
+}
+
+func capsuleToPod(capsule *gophercloud.Capsule) (*v1.Pod, error) {
+	var podCreationTimestamp metav1.Time
+
+	if capsule.CreatedAt != "" {
+		t, err := time.Parse(gophercloud.JSONRFC3339ZNoT, capsule.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+		podCreationTimestamp = metav1.NewTime(t)
+	}
+	//Zun don't record capsule start time, use update time instead
+	//containerStartTime := metav1.NewTime(time.Time(cg.Containers[0].ContainerProperties.InstanceView.CurrentState.StartTime))
+	if capsule.UpdatedAt != "" {
+		t, err := time.Parse(gophercloud.JSONRFC3339ZNoT, capsule.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		containerStartTime = metav1.NewTime(t)
+	}
+
+	// Deal with container inside capsule
+	containers := make([]v1.Container, 0, len(capsule.containers))
+	containerStatuses := make([]v1.ContainerStatus, 0, len(capsule.Containers))
+	for _, c := range capsule.containers {
+		container := v1.Container{
+			Name:    c.Name,
+			Image:   c.Image,
+			Command: c.Command,
+			Resources: v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", int64(c.CPU))),
+					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("%gG", c.Memroy)),
+				},
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", int64(c.CPU*1024/100))),
+					v1.ResourceMemory: "",
+				},
+			},
+		}
+		containers = append(containers, container)
+		containerStatus := v1.ContainerStatus{
+			Name:                 c.Name,
+			State:                zunContainerStausToContainerStatus(c.Status),
+			//Zun doesn't record termination state.
+			LastTerminationState: zunContainerStausToContainerStatus(c.Status),
+			Ready:                zunStatusToPodPhase(c.Status) == v1.PodRunning,
+			//Zun doesn't record restartCount.
+			RestartCount:         "",
+			Image:                c.Image,
+			ImageID:              "",
+			ContainerID:          c.ContainerID,
+		}
+
+		// Add to containerStatuses
+		containerStatuses = append(containerStatuses, containerStatus)
+	}
+
+	ip := ""
+	if capsule.Addresses != nil {
+		for _, v := range capsule.Addresses {
+			for _, addr := range v {
+				if addr["Version"] == 4 {
+					ip = addr["Addr"]
+				}
+			}
+		}
+	}
+
+	p := v1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              capsule.MetaLabels["PodName"],
+			Namespace:         capsule.MetaLabels["Namespace"],
+			ClusterName:       capsule.MetaLabels["ClusterName"],
+			UID:               types.UID(capsule.UUID),
+			CreationTimestamp: podCreationTimestamp,
+		},
+		Spec: v1.PodSpec{
+			NodeName:   capsule.MetaLabels["NodeName"],
+			Volumes:    []v1.Volume{},
+			Containers: containers,
+		},
+
+		Status: v1.PodStatus{
+			Phase:             zunCapStatusToPodPhase(capsule.Status),
+			Conditions:        []v1.PodCondition{},
+			Message:           "",
+			Reason:            "",
+			HostIP:            "",
+			PodIP:             ip,
+			//StartTime:         &containerStartTime,
+			StartTime:         "",
+			ContainerStatuses: containerStatuses,
+		},
+	}
+
+	return &p, nil
+}
+
+func zunContainerStausToContainerStatus(cs *gophercloud.Container) v1.ContainerState {
+	// Zun already container start time but not add support at gophercloud
+	//startTime := metav1.NewTime(time.Time(cs.StartTime))
+
+	// Zun container status:
+	//'Error', 'Running', 'Stopped', 'Paused', 'Unknown', 'Creating', 'Created',
+	//'Deleted', 'Deleting', 'Rebuilding', 'Dead', 'Restarting'
+
+	// Handle the case where the container is running.
+	if cs.Status == "Running" || cs.Status == "Stopped"{
+		return v1.ContainerState{
+			Running: &v1.ContainerStateRunning{
+				StartedAt: startTime,
+			},
+		}
+	}
+
+	// Handle the case where the container failed.
+	if cs.Status == "Error" || cs.Status == "Dead" {
+		return v1.ContainerState{
+			Terminated: &v1.ContainerStateTerminated{
+				//ExitCode:   cs.ExitCode,
+				ExitCode:   "",
+				Reason:     cs.State,
+				Message:    cs.StatusDetail,
+				//StartedAt:  startTime,
+				StartedAt:  "",
+				//Zun doesn't have FinishAt
+				FinishedAt: metav1.NewTime(time.Time(cs.UpdatedAt)),
+			},
+		}
+	}
+
+	// Handle the case where the container is pending.
+	// Which should be all other aci states.
+	return v1.ContainerState{
+		Waiting: &v1.ContainerStateWaiting{
+			Reason:  cs.Status,
+			Message: cs.StatusDetail,
+		},
+	}
+}
+
+func zunStatusToPodPhase(status string) v1.PodPhase {
+	switch status {
+	case "Running":
+		return v1.PodRunning
+	case "Stopped":
+		return v1.Succeeded
+	case "Error":
+		return v1.PodFailed
+	case "Dead":
+		return v1.PodFailed
+	case "Creating":
+		return v1.PodPending
+	case "Created":
+		return v1.PodPending
+	case "Restarting":
+		return v1.PodPending
+	case "Rebuilding":
+		return v1.PodPending
+	case "Paused":
+		return v1.PodPending
+	case "Deleting":
+		return v1.PodPending
+	case "Deleted":
+		return v1.PodPending
+	}
+
+	return v1.PodUnknown
+}
+
+func zunCapStatusToPodPhase(status string) v1.PodPhase {
+	switch status {
+	case "Running":
+		return v1.PodRunning
+	case "Succeeded":
+		return v1.Succeeded
+	case "Failed":
+		return v1.PodFailed
+	case "Pending":
+		return v1.PodPending
+	}
+
+	return v1.PodUnknown
+}
