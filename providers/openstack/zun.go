@@ -170,6 +170,22 @@ func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
 	return &p, nil
 }
 
+// CreatePod accepts a Pod definition and creates
+// an Zun deployment
+func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
+	return nil
+}
+
+// UpdatePod is a noop, Zun currently does not support live updates of a pod.
+func (p *ZunProvider) UpdatePod(pod *v1.Pod) error {
+	return nil
+}
+
+// DeletePod deletes the specified pod out of Zun.
+func (p *ZunProvider) DeletePod(pod *v1.Pod) error {
+	return capsules.Delete(p.ZunClient, fmt.Sprintf("%s-%s", pod.Namespace, pod.Name)).ExtractErr()
+}
+
 func zunContainerStausToContainerStatus(cs *capsules.Container) v1.ContainerState {
 	// Zun already container start time but not add support at gophercloud
 	//startTime := metav1.NewTime(time.Time(cs.StartTime))
