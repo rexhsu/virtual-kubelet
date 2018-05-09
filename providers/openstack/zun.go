@@ -11,6 +11,7 @@ import (
 	"github.com/gophercloud/gophercloud/pagination"
 	"github.com/gophercloud/gophercloud/openstack/container/v1/capsules"
 	"github.com/virtual-kubelet/virtual-kubelet/manager"
+	"github.com/virtual-kubelet/virtual-kubelet/providers"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -135,6 +136,70 @@ func (p *ZunProvider) GetPodStatus(namespace, name string) (*v1.PodStatus, error
 	}
 
 	return &pod.Status, nil
+}
+
+func (p *ZunProvider) GetContainerLogs(namespace, podName, containerName string, tail int) (string, error) {
+	return "not support in Zun Provider", nil
+}
+
+// NodeConditions returns a list of conditions (Ready, OutOfDisk, etc), for updates to the node status
+// within Kubernetes.
+func (p *ZunProvider) NodeConditions() []v1.NodeCondition {
+	// TODO: Make these dynamic and augment with custom ACI specific conditions of interest
+	return []v1.NodeCondition{
+		{
+			Type:               "Ready",
+			Status:             v1.ConditionTrue,
+			LastHeartbeatTime:  metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             "KubeletReady",
+			Message:            "kubelet is ready.",
+		},
+		{
+			Type:               "OutOfDisk",
+			Status:             v1.ConditionFalse,
+			LastHeartbeatTime:  metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             "KubeletHasSufficientDisk",
+			Message:            "kubelet has sufficient disk space available",
+		},
+		{
+			Type:               "MemoryPressure",
+			Status:             v1.ConditionFalse,
+			LastHeartbeatTime:  metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             "KubeletHasSufficientMemory",
+			Message:            "kubelet has sufficient memory available",
+		},
+		{
+			Type:               "DiskPressure",
+			Status:             v1.ConditionFalse,
+			LastHeartbeatTime:  metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             "KubeletHasNoDiskPressure",
+			Message:            "kubelet has no disk pressure",
+		},
+		{
+			Type:               "NetworkUnavailable",
+			Status:             v1.ConditionFalse,
+			LastHeartbeatTime:  metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+			Reason:             "RouteCreated",
+			Message:            "RouteController created a route",
+		},
+	}
+}
+
+// NodeAddresses returns a list of addresses for the node status
+// within Kubernetes.
+func (p *ZunProvider) NodeAddresses() []v1.NodeAddress {
+	return nil
+}
+
+// OperatingSystem returns the operating system for this provider.
+// This is a noop to default to Linux for now.
+func (p *ZunProvider) OperatingSystem() string {
+	return providers.OperatingSystemLinux
 }
 
 func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
