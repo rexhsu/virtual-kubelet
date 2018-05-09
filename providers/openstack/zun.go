@@ -2,11 +2,13 @@ package openstack
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"time"
 
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack"
+	"github.com/gophercloud/gophercloud/pagination"
 	"github.com/gophercloud/gophercloud/openstack/container/v1/capsules"
 	"github.com/virtual-kubelet/virtual-kubelet/manager"
 	"k8s.io/api/core/v1"
@@ -78,6 +80,61 @@ func (p *ZunProvider) GetPod(namespace, name string) (*v1.Pod, error) {
 	//}
 
 	return capsuleToPod(capsule)
+}
+
+// GetPods returns a list of all pods known to be running within ACI.
+func (p *ZunProvider) GetPods() ([]*v1.Pod, error) {
+        pager := capsules.List(p.ZunClient, nil)
+
+	pages := 0
+	err := pager.EachPage(func(page pagination.Page) (bool, error) {
+		pages++
+		return true, nil
+	})
+        if err != nil {
+                return nil, err
+        }
+
+        pods := make([]*v1.Pod, 0, pages)
+        err = pager.EachPage(func(page pagination.Page) (bool, error) {
+                CapsuleList, err := capsules.ExtractCapsules(page)
+                if err != nil {
+                        return false, err
+                }
+
+                for _, m := range CapsuleList {
+			c := m
+			if m.MetaLabels["NodeName"] != p.nodeName {
+				continue
+			}
+			p, err := capsuleToPod(&c)
+			if err != nil {
+		                log.Println(err)
+				continue
+	                }
+			pods = append(pods, p)
+		}
+		return true, nil
+        })
+        if err != nil {
+                return nil, err
+        }
+        return pods, nil
+}
+
+// GetPodStatus returns the status of a pod by name that is running inside ACI
+// returns nil if a pod by that name is not found.
+func (p *ZunProvider) GetPodStatus(namespace, name string) (*v1.PodStatus, error) {
+	pod, err := p.GetPod(namespace, name)
+	if err != nil {
+		return nil, err
+	}
+
+	if pod == nil {
+		return nil, nil
+	}
+
+	return &pod.Status, nil
 }
 
 func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
