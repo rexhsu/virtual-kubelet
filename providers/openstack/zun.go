@@ -256,3 +256,13 @@ func zunCapStatusToPodPhase(status string) v1.PodPhase {
 
 	return v1.PodUnknown
 }
+
+// Capacity returns a resource list containing the capacity limits set for ACI.
+func (p *ZunProvider) Capacity() v1.ResourceList {
+	return v1.ResourceList{
+		"cpu":    resource.MustParse(p.cpu),
+		"memory": resource.MustParse(p.memory),
+		"pods":   resource.MustParse(p.pods),
+	}
+}
+
