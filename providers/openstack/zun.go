@@ -28,10 +28,11 @@ type ZunProvider struct {
 	cpu                string
 	memory             string
 	pods               string
+	daemonEndpointPort int32
 }
 
 // NewZunProvider creates a new ZunProvider.
-func NewZunProvider(config string, rm *manager.ResourceManager, nodeName, operatingSystem string) (*ZunProvider, error) {
+func NewZunProvider(config string, rm *manager.ResourceManager, nodeName, operatingSystem string, daemonEndpointPort int32) (*ZunProvider, error) {
 	var p ZunProvider
 	var err error
 
@@ -64,6 +65,7 @@ func NewZunProvider(config string, rm *manager.ResourceManager, nodeName, operat
 
 	p.operatingSystem = operatingSystem
 	p.nodeName = nodeName
+	p.daemonEndpointPort = daemonEndpointPort
 
 	return &p, err
 }
@@ -194,6 +196,16 @@ func (p *ZunProvider) NodeConditions() []v1.NodeCondition {
 // within Kubernetes.
 func (p *ZunProvider) NodeAddresses() []v1.NodeAddress {
 	return nil
+}
+
+// NodeDaemonEndpoints returns NodeDaemonEndpoints for the node status
+// within Kubernetes.
+func (p *ZunProvider) NodeDaemonEndpoints() *v1.NodeDaemonEndpoints {
+	return &v1.NodeDaemonEndpoints{
+		KubeletEndpoint: v1.DaemonEndpoint{
+			Port: p.daemonEndpointPort,
+		},
+	}
 }
 
 // OperatingSystem returns the operating system for this provider.

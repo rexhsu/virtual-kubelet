@@ -96,7 +96,7 @@ func New(nodeName, operatingSystem, namespace, kubeConfig, taint, provider, prov
 			return nil, err
 		}
 	case "openstack":
-		p, err = openstack.NewZunProvider(providerConfig, rm, nodeName, operatingSystem)
+		p, err = openstack.NewZunProvider(providerConfig, rm, nodeName, operatingSystem, daemonEndpointPort)
 		if err != nil {
 			return nil, err
 		}
@@ -117,7 +117,6 @@ func New(nodeName, operatingSystem, namespace, kubeConfig, taint, provider, prov
 		resourceManager: rm,
 		provider:        p,
 	}
-
 	if err = s.registerNode(); err != nil {
 		return s, err
 	}
