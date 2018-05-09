@@ -2,19 +2,22 @@ package openstack
 
 import (
 	"fmt"
-	"net/http"
+	"os"
+	"time"
 
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack"
 	"github.com/gophercloud/gophercloud/openstack/container/v1/capsules"
 	"github.com/virtual-kubelet/virtual-kubelet/manager"
 	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // ZunProvider implements the virtual-kubelet provider interface and communicates with OpenStack's Zun APIs.
 type ZunProvider struct {
-	ZunClient          *gophercloud.ProviderClient
+	ZunClient          *gophercloud.ServiceClient
 	resourceManager    *manager.ResourceManager
 	region             string
 	nodeName           string
@@ -67,9 +70,6 @@ func NewZunProvider(config string, rm *manager.ResourceManager, nodeName, operat
 func (p *ZunProvider) GetPod(namespace, name string) (*v1.Pod, error) {
 	capsule, err := capsules.Get(p.ZunClient, fmt.Sprintf("%s-%s", namespace, name)).Extract()
 	if err != nil {
-		if err == gophercloud.ErrDefault404 {
-			return nil, nil
-		}
 		return nil, err
 	}
 
@@ -80,54 +80,43 @@ func (p *ZunProvider) GetPod(namespace, name string) (*v1.Pod, error) {
 	return capsuleToPod(capsule)
 }
 
-func capsuleToPod(capsule *gophercloud.Capsule) (*v1.Pod, error) {
+func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
 	var podCreationTimestamp metav1.Time
 
-	if capsule.CreatedAt != "" {
-		t, err := time.Parse(gophercloud.JSONRFC3339ZNoT, capsule.CreatedAt)
-		if err != nil {
-			return nil, err
-		}
-		podCreationTimestamp = metav1.NewTime(t)
-	}
+	podCreationTimestamp = metav1.NewTime(capsule.CreatedAt)
 	//Zun don't record capsule start time, use update time instead
 	//containerStartTime := metav1.NewTime(time.Time(cg.Containers[0].ContainerProperties.InstanceView.CurrentState.StartTime))
-	if capsule.UpdatedAt != "" {
-		t, err := time.Parse(gophercloud.JSONRFC3339ZNoT, capsule.UpdatedAt)
-		if err != nil {
-			return nil, err
-		}
-		containerStartTime = metav1.NewTime(t)
-	}
+	containerStartTime := metav1.NewTime(capsule.UpdatedAt)
 
 	// Deal with container inside capsule
-	containers := make([]v1.Container, 0, len(capsule.containers))
+	containers := make([]v1.Container, 0, len(capsule.Containers))
 	containerStatuses := make([]v1.ContainerStatus, 0, len(capsule.Containers))
-	for _, c := range capsule.containers {
+	for _, c := range capsule.Containers {
+		container_command := []string{c.Command}
 		container := v1.Container{
 			Name:    c.Name,
 			Image:   c.Image,
-			Command: c.Command,
+			Command: container_command,
 			Resources: v1.ResourceRequirements{
 				Limits: v1.ResourceList{
 					v1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", int64(c.CPU))),
-					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("%gG", c.Memroy)),
+					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("%gG", c.Memory)),
 				},
 				Requests: v1.ResourceList{
 					v1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", int64(c.CPU*1024/100))),
-					v1.ResourceMemory: "",
+					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("")),
 				},
 			},
 		}
 		containers = append(containers, container)
 		containerStatus := v1.ContainerStatus{
 			Name:                 c.Name,
-			State:                zunContainerStausToContainerStatus(c.Status),
+			State:                zunContainerStausToContainerStatus(&c),
 			//Zun doesn't record termination state.
-			LastTerminationState: zunContainerStausToContainerStatus(c.Status),
+			LastTerminationState: zunContainerStausToContainerStatus(&c),
 			Ready:                zunStatusToPodPhase(c.Status) == v1.PodRunning,
 			//Zun doesn't record restartCount.
-			RestartCount:         "",
+			RestartCount:         int32(0),
 			Image:                c.Image,
 			ImageID:              "",
 			ContainerID:          c.ContainerID,
@@ -141,8 +130,8 @@ func capsuleToPod(capsule *gophercloud.Capsule) (*v1.Pod, error) {
 	if capsule.Addresses != nil {
 		for _, v := range capsule.Addresses {
 			for _, addr := range v {
-				if addr["Version"] == 4 {
-					ip = addr["Addr"]
+				if addr.Version == float64(4) {
+					ip = addr.Addr
 				}
 			}
 		}
@@ -173,8 +162,7 @@ func capsuleToPod(capsule *gophercloud.Capsule) (*v1.Pod, error) {
 			Reason:            "",
 			HostIP:            "",
 			PodIP:             ip,
-			//StartTime:         &containerStartTime,
-			StartTime:         "",
+			StartTime:         &containerStartTime,
 			ContainerStatuses: containerStatuses,
 		},
 	}
@@ -182,7 +170,7 @@ func capsuleToPod(capsule *gophercloud.Capsule) (*v1.Pod, error) {
 	return &p, nil
 }
 
-func zunContainerStausToContainerStatus(cs *gophercloud.Container) v1.ContainerState {
+func zunContainerStausToContainerStatus(cs *capsules.Container) v1.ContainerState {
 	// Zun already container start time but not add support at gophercloud
 	//startTime := metav1.NewTime(time.Time(cs.StartTime))
 
@@ -194,7 +182,7 @@ func zunContainerStausToContainerStatus(cs *gophercloud.Container) v1.ContainerS
 	if cs.Status == "Running" || cs.Status == "Stopped"{
 		return v1.ContainerState{
 			Running: &v1.ContainerStateRunning{
-				StartedAt: startTime,
+				StartedAt: metav1.NewTime(time.Time(cs.CreatedAt)),
 			},
 		}
 	}
@@ -204,11 +192,11 @@ func zunContainerStausToContainerStatus(cs *gophercloud.Container) v1.ContainerS
 		return v1.ContainerState{
 			Terminated: &v1.ContainerStateTerminated{
 				//ExitCode:   cs.ExitCode,
-				ExitCode:   "",
-				Reason:     cs.State,
+				ExitCode:   int32(0),
+				Reason:     cs.Status,
 				Message:    cs.StatusDetail,
 				//StartedAt:  startTime,
-				StartedAt:  "",
+				StartedAt:  metav1.NewTime(time.Time(cs.CreatedAt)),
 				//Zun doesn't have FinishAt
 				FinishedAt: metav1.NewTime(time.Time(cs.UpdatedAt)),
 			},
@@ -230,7 +218,7 @@ func zunStatusToPodPhase(status string) v1.PodPhase {
 	case "Running":
 		return v1.PodRunning
 	case "Stopped":
-		return v1.Succeeded
+		return v1.PodSucceeded
 	case "Error":
 		return v1.PodFailed
 	case "Dead":
@@ -259,7 +247,7 @@ func zunCapStatusToPodPhase(status string) v1.PodPhase {
 	case "Running":
 		return v1.PodRunning
 	case "Succeeded":
-		return v1.Succeeded
+		return v1.PodSucceeded
 	case "Failed":
 		return v1.PodFailed
 	case "Pending":

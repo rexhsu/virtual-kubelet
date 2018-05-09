@@ -10,7 +10,6 @@ import (
 )
 
 type providerConfig struct {
-	ResourceGroup   string
 	Region          string
 	OperatingSystem string
 	CPU             string
@@ -18,13 +17,12 @@ type providerConfig struct {
 	Pods            string
 }
 
-func (p *ACIProvider) loadConfig(r io.Reader) error {
+func (p *ZunProvider) loadConfig(r io.Reader) error {
 	var config providerConfig
 	if _, err := toml.DecodeReader(r, &config); err != nil {
 		return err
 	}
 	p.region = config.Region
-	p.resourceGroup = config.ResourceGroup
 
 	// Default to 20 mcpu
 	p.cpu = "20"
