@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gophercloud/gophercloud"
@@ -226,19 +227,25 @@ func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
 	containers := make([]v1.Container, 0, len(capsule.Containers))
 	containerStatuses := make([]v1.ContainerStatus, 0, len(capsule.Containers))
 	for _, c := range capsule.Containers {
-		container_command := []string{c.Command}
+		containerCommand := []string{c.Command}
+		//containerMemoryMB, err := strconv.Atoi(c.Memory)
+		containerMemoryMB, err := strconv.Atoi("1024")
+		if err != nil{
+			log.Println(err)
+		}
+		containerMemoryGB := float64(containerMemoryMB/1024)
 		container := v1.Container{
 			Name:    c.Name,
 			Image:   c.Image,
-			Command: container_command,
+			Command: containerCommand,
 			Resources: v1.ResourceRequirements{
 				Limits: v1.ResourceList{
 					v1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", int64(c.CPU))),
-					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("%gG", c.Memory)),
+					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("%gG", containerMemoryGB)),
 				},
 				Requests: v1.ResourceList{
 					v1.ResourceCPU:    resource.MustParse(fmt.Sprintf("%d", int64(c.CPU*1024/100))),
-					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("")),
+					v1.ResourceMemory: resource.MustParse(fmt.Sprintf("%gG", containerMemoryGB)),
 				},
 			},
 		}
