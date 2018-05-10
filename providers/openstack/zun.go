@@ -132,10 +132,116 @@ func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
 	//capsuleTemplate := new(capsules.Template)
 	var capsule capsules.Capsule
 	capsule.RestartPolicy = pod.Spec.RestartPolicy
-	log.Println("===========================")
-	log.Println(pod.Spec)
+	capsule.CapsuleVersion = "beta"
+
+	podUID := string(pod.UID)
+	podCreationTimestamp := pod.CreationTimestamp.String()
+	capsule.MetaLabels = map[string]string{
+		"PodName":           pod.Name,
+		"ClusterName":       pod.ClusterName,
+		"NodeName":          pod.Spec.NodeName,
+		"Namespace":         pod.Namespace,
+		"UID":               podUID,
+		"CreationTimestamp": podCreationTimestamp,
+	}
+	capsule.MetaName = pod.Namespace + '-' + pod.Name
+
+
+	// get containers
+	containers, err := p.getContainers(pod)
+	if err != nil {
+		return err
+	}
+
+	// assign all the things
+	capsules.Capsule.Containers = containers
+
+	// TODO(BJK) containergrouprestartpolicy??
+	_, err = p.aciClient.CreateContainerGroup(
+		p.resourceGroup,
+		fmt.Sprintf("%s-%s", pod.Namespace, pod.Name),
+		containerGroup,
+	)
 
 	return err
+}
+
+func (p *ZunProvider) getContainers(pod *v1.Pod) ([]capsules.Container, error) {
+	containers := make([]capsules.Container, 0, len(pod.Spec.Containers))
+	for _, container := range pod.Spec.Containers {
+		c := capsules.Container{
+			Name: container.Name,
+			Image: container.Image,
+			Command: append(container.Command, container.Args...),
+			WorkDir: container.WorkingDir,
+			ImagePullPolicy: container.ImagePullPolicy,
+		}
+
+		c.Environment = map[string]string{}
+		for _, e := range container.Env {
+			c.Environment[e.Name] = e.Value
+		}
+
+		if container.Resources.Limits != nil {
+		//	cpuLimit := cpuRequest
+			if _, ok := container.Resources.Limits[v1.ResourceCPU]; ok {
+				cpuLimit = float64(container.Resources.Limits.Cpu().MilliValue()) / 1000.00
+			}
+
+		//	memoryLimit := memoryRequest
+			if _, ok := container.Resources.Limits[v1.ResourceMemory]; ok {
+				memoryLimit = float64(container.Resources.Limits.Memory().Value()) / 1000000000.00
+			}
+
+			c.CPU = cpuLimit
+			c.Memory = memoryLimit*1024
+		}
+
+		// NOTE(kevinz): Zun cpu request not support
+		//		cpuRequest := 1.00
+		//		if _, ok := container.Resources.Requests[v1.ResourceCPU]; ok {
+		//			cpuRequest = float64(container.Resources.Requests.Cpu().MilliValue()/10.00) / 100.00
+		//			if cpuRequest < 0.01 {
+		//				cpuRequest = 0.01
+		//			}
+		//		}
+
+		// NOTE(kevinz): Zun memory request not support
+		//		memoryRequest := 1.50
+		//		if _, ok := container.Resources.Requests[v1.ResourceMemory]; ok {
+		//			memoryRequest = float64(container.Resources.Requests.Memory().Value()/100000000.00) / 10.00
+		//			if memoryRequest < 0.10 {
+		//				memoryRequest = 0.10
+		//			}
+		//		}
+
+		//		c.Resources = aci.ResourceRequirements{
+		//			Requests: &aci.ResourceRequests{
+		//				CPU:        cpuRequest,
+		//				MemoryInGB: memoryRequest,
+		//			},
+		//		}
+
+		//Sync Port with container
+		//		for _, p := range container.Ports {
+		//			c.Ports = append(c.Ports, aci.ContainerPort{
+		//				Port:     p.ContainerPort,
+		//				Protocol: getProtocol(p.Protocol),
+		//			})
+		//		}
+
+		//Add later for volume
+		//		c.VolumeMounts = make([]aci.VolumeMount, 0, len(container.VolumeMounts))
+		//		for _, v := range container.VolumeMounts {
+		//			c.VolumeMounts = append(c.VolumeMounts, aci.VolumeMount{
+		//				Name:      v.Name,
+		//				MountPath: v.MountPath,
+		//				ReadOnly:  v.ReadOnly,
+		//			})
+		//		}
+		containers = append(containers, c)
+	}
+	return containers, nil
 }
 
 // GetPodStatus returns the status of a pod by name that is running inside ACI
