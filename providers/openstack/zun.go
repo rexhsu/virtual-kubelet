@@ -126,6 +126,18 @@ func (p *ZunProvider) GetPods() ([]*v1.Pod, error) {
         return pods, nil
 }
 
+// CreatePod accepts a Pod definition and creates
+// an Zun deployment
+func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
+	//capsuleTemplate := new(capsules.Template)
+	var capsule capsules.Capsule
+	capsule.RestartPolicy = pod.Spec.RestartPolicy
+	log.Println("===========================")
+	log.Println(pod.Spec)
+
+	return err
+}
+
 // GetPodStatus returns the status of a pod by name that is running inside ACI
 // returns nil if a pod by that name is not found.
 func (p *ZunProvider) GetPodStatus(namespace, name string) (*v1.PodStatus, error) {
@@ -309,12 +321,6 @@ func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
 	}
 
 	return &p, nil
-}
-
-// CreatePod accepts a Pod definition and creates
-// an Zun deployment
-func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
-	return nil
 }
 
 // UpdatePod is a noop, Zun currently does not support live updates of a pod.
