@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"time"
+	"encoding/json"
 
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack"
@@ -130,13 +131,14 @@ func (p *ZunProvider) GetPods() ([]*v1.Pod, error) {
 // an Zun deployment
 func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
 	//capsuleTemplate := new(capsules.Template)
-	var capsule capsules.Capsule
-	capsule.RestartPolicy = pod.Spec.RestartPolicy
-	capsule.CapsuleVersion = "beta"
+	var capsuleTemplate CapsuleTemplate
+	capsuleTemplate.ApiVersion = "beta"
+	capsuleTemplate.Kind = "capsule"
 
 	podUID := string(pod.UID)
 	podCreationTimestamp := pod.CreationTimestamp.String()
-	capsule.MetaLabels = map[string]string{
+	var metadata Metadata
+	metadata.Labels = map[string]string{
 		"PodName":           pod.Name,
 		"ClusterName":       pod.ClusterName,
 		"NodeName":          pod.Spec.NodeName,
@@ -144,42 +146,47 @@ func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
 		"UID":               podUID,
 		"CreationTimestamp": podCreationTimestamp,
 	}
-	capsule.MetaName = pod.Namespace + '-' + pod.Name
-
-
+	metadata.Name = pod.Namespace + '-' + pod.Name
+	capsuleTemplate.Metadata = metadata
 	// get containers
 	containers, err := p.getContainers(pod)
 	if err != nil {
 		return err
 	}
-
-	// assign all the things
-	capsules.Capsule.Containers = containers
-
-	// TODO(BJK) containergrouprestartpolicy??
-	_, err = p.aciClient.CreateContainerGroup(
-		p.resourceGroup,
-		fmt.Sprintf("%s-%s", pod.Namespace, pod.Name),
-		containerGroup,
-	)
-
+	capsuleTemplate.Spec.Containers = containers
+	data, err := json.MarshalIndent(capsuleTemplate, "", "  ")
+	if err != null{
+		return err
+	}
+	template := new(capsules.Template)
+	template.Bin = []byte(data)
+	createOpts := capsules.CreateOpts{
+		TemplateOpts:    template,
+	}
+	
+	err = capsules.Create(p.ZunClient, createOpts).ExtractErr()
+	if err != null{
+		return err
+	}
 	return err
 }
 
-func (p *ZunProvider) getContainers(pod *v1.Pod) ([]capsules.Container, error) {
-	containers := make([]capsules.Container, 0, len(pod.Spec.Containers))
+func (p *ZunProvider) getContainers(pod *v1.Pod) ([]Container, error) {
+	containers := make([]Container, 0, len(pod.Spec.Containers))
 	for _, container := range pod.Spec.Containers {
-		c := capsules.Container{
+		c := Container{
 			Name: container.Name,
 			Image: container.Image,
 			Command: append(container.Command, container.Args...),
-			WorkDir: container.WorkingDir,
+			WorkingDir: container.WorkingDir,
 			ImagePullPolicy: container.ImagePullPolicy,
 		}
 
-		c.Environment = map[string]string{}
+		// Container ENV need to sync with K8s in Zun and gophercloud. Will change them.
+		// From map[string]string to []map[string]string
+		c.Env = map[string]string{}
 		for _, e := range container.Env {
-			c.Environment[e.Name] = e.Value
+			c.Env[e.Name] = e.Value
 		}
 
 		if container.Resources.Limits != nil {
@@ -193,8 +200,8 @@ func (p *ZunProvider) getContainers(pod *v1.Pod) ([]capsules.Container, error) {
 				memoryLimit = float64(container.Resources.Limits.Memory().Value()) / 1000000000.00
 			}
 
-			c.CPU = cpuLimit
-			c.Memory = memoryLimit*1024
+			c.Resources.Limits["cpu"] = cpuLimit
+			c.Resources.Limits["memory"] = memoryLimit*1024
 		}
 
 		// NOTE(kevinz): Zun cpu request not support
@@ -344,7 +351,7 @@ func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
 	// Deal with container inside capsule
 	containers := make([]v1.Container, 0, len(capsule.Containers))
 	containerStatuses := make([]v1.ContainerStatus, 0, len(capsule.Containers))
-	for _, c := range capsule.Containers {
+	for _, c := range capsule.Containers[1:] {
 		containerCommand := []string{c.Command}
 		//containerMemoryMB, err := strconv.Atoi(c.Memory)
 		containerMemoryMB, err := strconv.Atoi("1024")
