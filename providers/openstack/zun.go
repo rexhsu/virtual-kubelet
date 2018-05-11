@@ -146,7 +146,7 @@ func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
 		"UID":               podUID,
 		"CreationTimestamp": podCreationTimestamp,
 	}
-	metadata.Name = pod.Namespace + '-' + pod.Name
+	metadata.Name = pod.Namespace + "-" + pod.Name
 	capsuleTemplate.Metadata = metadata
 	// get containers
 	containers, err := p.getContainers(pod)
@@ -155,7 +155,7 @@ func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
 	}
 	capsuleTemplate.Spec.Containers = containers
 	data, err := json.MarshalIndent(capsuleTemplate, "", "  ")
-	if err != null{
+	if err != nil {
 		return err
 	}
 	template := new(capsules.Template)
@@ -163,9 +163,8 @@ func (p *ZunProvider) CreatePod(pod *v1.Pod) error {
 	createOpts := capsules.CreateOpts{
 		TemplateOpts:    template,
 	}
-	
 	err = capsules.Create(p.ZunClient, createOpts).ExtractErr()
-	if err != null{
+	if err != nil{
 		return err
 	}
 	return err
@@ -175,11 +174,11 @@ func (p *ZunProvider) getContainers(pod *v1.Pod) ([]Container, error) {
 	containers := make([]Container, 0, len(pod.Spec.Containers))
 	for _, container := range pod.Spec.Containers {
 		c := Container{
-			Name: container.Name,
+		//	Name: container.Name,
 			Image: container.Image,
 			Command: append(container.Command, container.Args...),
 			WorkingDir: container.WorkingDir,
-			ImagePullPolicy: container.ImagePullPolicy,
+			ImagePullPolicy: string(container.ImagePullPolicy),
 		}
 
 		// Container ENV need to sync with K8s in Zun and gophercloud. Will change them.
@@ -190,12 +189,12 @@ func (p *ZunProvider) getContainers(pod *v1.Pod) ([]Container, error) {
 		}
 
 		if container.Resources.Limits != nil {
-		//	cpuLimit := cpuRequest
+			cpuLimit := float64(1)
 			if _, ok := container.Resources.Limits[v1.ResourceCPU]; ok {
 				cpuLimit = float64(container.Resources.Limits.Cpu().MilliValue()) / 1000.00
 			}
 
-		//	memoryLimit := memoryRequest
+			memoryLimit := 0.5
 			if _, ok := container.Resources.Limits[v1.ResourceMemory]; ok {
 				memoryLimit = float64(container.Resources.Limits.Memory().Value()) / 1000000000.00
 			}
@@ -402,7 +401,6 @@ func capsuleToPod(capsule *capsules.Capsule) (*v1.Pod, error) {
 			}
 		}
 	}
-
 	p := v1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
